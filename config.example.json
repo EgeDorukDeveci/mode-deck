@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "theme": "dark",
+  "suggestions_reviewed": true,
+  "selected_mode_id": "gaming",
+  "modes": [
+    {
+      "id": "gaming",
+      "name": "Gaming",
+      "accent": "green",
+      "builtin": true,
+      "close_apps": [],
+      "launches": [],
+      "system": {
+        "power_plan_guid": "",
+        "mute_notifications": false,
+        "wsl_action": "none",
+        "wsl_distro": ""
+      },
+      "restore": {
+        "relaunch_closed_apps": true,
+        "restart_wsl": true
+      }
+    }
+  ]
+}
