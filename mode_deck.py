@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -439,6 +439,16 @@ def installed_app_candidates() -> dict[str, dict[str, str]]:
             "path": r"%ProgramFiles(x86)%\Steam\steam.exe",
             "process": "steam",
         },
+        "epic": {
+            "label": "Epic Games Launcher",
+            "path": r"%ProgramFiles%\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+            "process": "EpicGamesLauncher",
+        },
+        "opera_gx": {
+            "label": "Opera GX",
+            "path": r"%LOCALAPPDATA%\Programs\Opera GX\opera.exe",
+            "process": "opera",
+        },
         "discord": {
             "label": "Discord",
             "path": r"%LOCALAPPDATA%\Discord\Update.exe",
@@ -484,6 +494,23 @@ def launch_action(app: dict[str, str], *, enabled: bool = True) -> dict[str, Any
     }
 
 
+def browser_url_action(
+    app: dict[str, str],
+    label: str,
+    url: str,
+) -> dict[str, Any]:
+    return {
+        "id": action_id(),
+        "type": "launch_app",
+        "enabled": True,
+        "label": label,
+        "target": app["path"],
+        "process": app["process"],
+        "arguments": url,
+        "restore": False,
+    }
+
+
 def mode_template(mode_id: str, name: str, accent: str) -> dict[str, Any]:
     return {
         "id": mode_id,
@@ -518,12 +545,16 @@ def default_config() -> dict[str, Any]:
         if key in apps:
             gaming["launches"].append(launch_action(apps[key]))
 
-    for key in ("steam", "discord", "spotify"):
+    for key in ("steam", "epic"):
         if key in apps:
             study["close_apps"].append(close_action(apps[key]))
-    for key in ("chrome", "vscode"):
-        if key in apps:
-            study["launches"].append(launch_action(apps[key]))
+    if "opera_gx" in apps:
+        study["launches"].extend(
+            [
+                browser_url_action(apps["opera_gx"], "WhatsApp Web", "https://web.whatsapp.com/"),
+                browser_url_action(apps["opera_gx"], "YouTube", "https://www.youtube.com/"),
+            ]
+        )
 
     if "vscode" in apps:
         chill["close_apps"].append(close_action(apps["vscode"]))
@@ -532,7 +563,7 @@ def default_config() -> dict[str, Any]:
             chill["launches"].append(launch_action(apps[key]))
 
     return {
-        "version": 3,
+        "version": 4,
         "theme": "dark",
         "suggestions_reviewed": False,
         "selected_mode_id": "gaming",
@@ -564,8 +595,8 @@ def repair_empty_builtin_modes(config: dict[str, Any]) -> bool:
             "launch": ("steam", "discord"),
         },
         "study": {
-            "close": ("steam", "discord", "spotify"),
-            "launch": ("chrome", "vscode"),
+            "close": ("steam", "epic"),
+            "launch": (),
         },
         "chill": {
             "close": ("vscode",),
@@ -618,6 +649,28 @@ def repair_empty_builtin_modes(config: dict[str, Any]) -> bool:
     return changed
 
 
+def apply_personal_study_preset(config: dict[str, Any]) -> bool:
+    study = next(
+        (mode for mode in config.get("modes", []) if str(mode.get("id")) == "study"),
+        None,
+    )
+    if not study:
+        return False
+    apps = installed_app_candidates()
+    study["close_apps"] = [
+        close_action(apps[key])
+        for key in ("steam", "epic")
+        if key in apps
+    ]
+    study["launches"] = []
+    if "opera_gx" in apps:
+        study["launches"] = [
+            browser_url_action(apps["opera_gx"], "WhatsApp Web", "https://web.whatsapp.com/"),
+            browser_url_action(apps["opera_gx"], "YouTube", "https://www.youtube.com/"),
+        ]
+    return True
+
+
 class ConfigStore:
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self.path = path
@@ -649,6 +702,11 @@ class ConfigStore:
             if repair_empty_builtin_modes(config):
                 changed = True
             config["version"] = 3
+            changed = True
+        if int(config.get("version") or 1) < 4:
+            if apply_personal_study_preset(config):
+                changed = True
+            config["version"] = 4
             changed = True
         known = {str(mode.get("id")) for mode in config["modes"]}
         if config.get("selected_mode_id") not in known and known:
@@ -724,7 +782,7 @@ class ModeEngine:
             action_type = str(action.get("type") or "launch_app")
             duplicate = action_type == "launch_app" and is_launch_running(
                 target, str(action.get("process") or "")
-            )
+            ) and not str(action.get("arguments") or "").strip()
             detail = "already running; will skip" if duplicate else target
             items.append(
                 PreviewItem(
@@ -866,7 +924,7 @@ class ModeEngine:
             try:
                 if action_type == "launch_app" and is_launch_running(
                     target, str(action.get("process") or "")
-                ):
+                ) and not str(action.get("arguments") or "").strip():
                     session["results"].append(
                         {"action": action["id"], "status": "skipped", "detail": "already running"}
                     )
@@ -2122,7 +2180,16 @@ def run_self_test() -> int:
                     "path": str(root / f"{key}.exe"),
                     "process": key,
                 }
-                for key in ("chrome", "edge", "vscode", "steam", "discord", "spotify")
+                for key in (
+                    "chrome",
+                    "edge",
+                    "vscode",
+                    "steam",
+                    "epic",
+                    "discord",
+                    "spotify",
+                    "opera_gx",
+                )
             }
             migration_config = default_config()
             migration_config["version"] = 2
@@ -2138,14 +2205,24 @@ def run_self_test() -> int:
             migration_store = ConfigStore(root / "migration.json")
             migration_store.save(migration_config)
             migrated = migration_store.load()
-            assert migrated["version"] == 3
+            assert migrated["version"] == 4
             assert sum(
                 1
                 for mode in migrated["modes"]
                 if mode["id"] in {"gaming", "study", "chill"}
                 for action in mode["close_apps"] + mode["launches"]
                 if action["enabled"]
-            ) == 13
+            ) == 12
+            migrated_study = next(mode for mode in migrated["modes"] if mode["id"] == "study")
+            assert [item["target"] for item in migrated_study["close_apps"]] == [
+                "steam",
+                "epic",
+            ]
+            assert [item["label"] for item in migrated_study["launches"]] == [
+                "WhatsApp Web",
+                "YouTube",
+            ]
+            assert all(item["process"] == "opera_gx" for item in migrated_study["launches"])
             custom_empty = next(mode for mode in migrated["modes"] if mode["id"] == "custom-empty")
             assert not custom_empty["close_apps"] and not custom_empty["launches"]
         finally:
@@ -2306,6 +2383,43 @@ def run_self_test() -> int:
             engine.restore()
             assert ("stop", "terminate", "Ubuntu") in states["wsl"]
             assert ("start", "Ubuntu") in states["wsl"]
+
+            custom["system"] = {
+                "power_plan_guid": "",
+                "mute_notifications": False,
+                "wsl_action": "none",
+                "wsl_distro": "",
+            }
+            custom["launches"] = [
+                {
+                    "id": "opera-whatsapp",
+                    "type": "launch_app",
+                    "enabled": True,
+                    "label": "WhatsApp Web",
+                    "target": str(root / "opera.exe"),
+                    "process": "opera",
+                    "arguments": "https://web.whatsapp.com/",
+                },
+                {
+                    "id": "opera-youtube",
+                    "type": "launch_app",
+                    "enabled": True,
+                    "label": "YouTube",
+                    "target": str(root / "opera.exe"),
+                    "process": "opera",
+                    "arguments": "https://www.youtube.com/",
+                },
+            ]
+            globals()["is_launch_running"] = lambda _target, process_name="": True
+            before_launches = len(states["launched"])
+            engine.activate(
+                "custom-test",
+                {"opera-whatsapp", "opera-youtube"},
+                approve_force_close=lambda _label: False,
+                approve_wsl=lambda _description: False,
+            )
+            assert len(states["launched"]) == before_launches + 2
+            engine.restore()
         finally:
             globals()["process_snapshot"] = original_snapshot
             globals()["graceful_close"] = original_graceful
