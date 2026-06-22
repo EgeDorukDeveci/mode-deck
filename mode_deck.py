@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -316,6 +316,9 @@ def launch_target(target: str, action_type: str = "app", arguments: str = "") ->
     if action_type == "url":
         webbrowser.open(target)
         return
+    if action_type == "shell":
+        os.startfile(target)
+        return
     if action_type in {"folder", "file"}:
         os.startfile(target)
         return
@@ -483,6 +486,11 @@ def installed_app_candidates() -> dict[str, dict[str, str]]:
             "path": r"%LOCALAPPDATA%\Programs\Opera GX\opera.exe",
             "process": "opera",
         },
+        "opencode": {
+            "label": "OpenCode",
+            "path": r"%LOCALAPPDATA%\Programs\@opencode-aidesktop\OpenCode.exe",
+            "process": "OpenCode",
+        },
         "discord": {
             "label": "Discord",
             "path": r"%LOCALAPPDATA%\Discord\Update.exe",
@@ -545,6 +553,23 @@ def browser_url_action(
     }
 
 
+def shell_app_action(
+    label: str,
+    app_id: str,
+    process: str,
+) -> dict[str, Any]:
+    return {
+        "id": action_id(),
+        "type": "launch_shell",
+        "enabled": True,
+        "label": label,
+        "target": rf"shell:AppsFolder\{app_id}",
+        "process": process,
+        "arguments": "",
+        "restore": False,
+    }
+
+
 def mode_template(mode_id: str, name: str, accent: str) -> dict[str, Any]:
     return {
         "id": mode_id,
@@ -601,14 +626,24 @@ def default_config() -> dict[str, Any]:
             ]
         )
 
-    if "vscode" in apps:
-        chill["close_apps"].append(close_action(apps["vscode"]))
-    for key in ("spotify", "discord"):
+    chill["name"] = "Vibing"
+    for key in ("opencode", "vscode", "spotify"):
         if key in apps:
             chill["launches"].append(launch_action(apps[key]))
+    chill["launches"].append(
+        shell_app_action("Codex", "OpenAI.Codex_2p2nqsd0c76g0!App", "Codex")
+    )
+    if "opera_gx" in apps:
+        chill["launches"].extend(
+            [
+                browser_url_action(apps["opera_gx"], "WhatsApp Web", "https://web.whatsapp.com/"),
+                browser_url_action(apps["opera_gx"], "YouTube", "https://www.youtube.com/"),
+                browser_url_action(apps["opera_gx"], "GitHub", "https://github.com/"),
+            ]
+        )
 
     return {
-        "version": 5,
+        "version": 6,
         "theme": "dark",
         "suggestions_reviewed": False,
         "selected_mode_id": "gaming",
@@ -727,6 +762,35 @@ def apply_safe_gaming_preset(config: dict[str, Any]) -> bool:
     return True
 
 
+def apply_vibing_preset(config: dict[str, Any]) -> bool:
+    vibing = next(
+        (mode for mode in config.get("modes", []) if str(mode.get("id")) == "chill"),
+        None,
+    )
+    if not vibing:
+        return False
+    apps = installed_app_candidates()
+    vibing["name"] = "Vibing"
+    vibing["close_apps"] = []
+    vibing["launches"] = [
+        launch_action(apps[key])
+        for key in ("opencode", "vscode", "spotify")
+        if key in apps
+    ]
+    vibing["launches"].append(
+        shell_app_action("Codex", "OpenAI.Codex_2p2nqsd0c76g0!App", "Codex")
+    )
+    if "opera_gx" in apps:
+        vibing["launches"].extend(
+            [
+                browser_url_action(apps["opera_gx"], "WhatsApp Web", "https://web.whatsapp.com/"),
+                browser_url_action(apps["opera_gx"], "YouTube", "https://www.youtube.com/"),
+                browser_url_action(apps["opera_gx"], "GitHub", "https://github.com/"),
+            ]
+        )
+    return True
+
+
 class ConfigStore:
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self.path = path
@@ -768,6 +832,11 @@ class ConfigStore:
             if apply_safe_gaming_preset(config):
                 changed = True
             config["version"] = 5
+            changed = True
+        if int(config.get("version") or 1) < 6:
+            if apply_vibing_preset(config):
+                changed = True
+            config["version"] = 6
             changed = True
         known = {str(mode.get("id")) for mode in config["modes"]}
         if config.get("selected_mode_id") not in known and known:
@@ -864,7 +933,7 @@ class ModeEngine:
                 continue
             target = str(action.get("target") or "")
             action_type = str(action.get("type") or "launch_app")
-            duplicate = action_type == "launch_app" and is_launch_running(
+            duplicate = action_type in {"launch_app", "launch_shell"} and is_launch_running(
                 target, str(action.get("process") or "")
             ) and not str(action.get("arguments") or "").strip()
             detail = "already running; will skip" if duplicate else target
@@ -1061,7 +1130,7 @@ class ModeEngine:
             target = str(action.get("target") or "")
             action_type = str(action.get("type") or "launch_app")
             try:
-                if action_type == "launch_app" and is_launch_running(
+                if action_type in {"launch_app", "launch_shell"} and is_launch_running(
                     target, str(action.get("process") or "")
                 ) and not str(action.get("arguments") or "").strip():
                     session["results"].append(
@@ -2341,6 +2410,7 @@ def run_self_test() -> int:
                     "discord",
                     "spotify",
                     "opera_gx",
+                    "opencode",
                 )
             }
             migration_config = default_config()
@@ -2357,14 +2427,14 @@ def run_self_test() -> int:
             migration_store = ConfigStore(root / "migration.json")
             migration_store.save(migration_config)
             migrated = migration_store.load()
-            assert migrated["version"] == 5
+            assert migrated["version"] == 6
             assert sum(
                 1
                 for mode in migrated["modes"]
                 if mode["id"] in {"gaming", "study", "chill"}
                 for action in mode["close_apps"] + mode["launches"]
                 if action["enabled"]
-            ) == 10
+            ) == 14
             migrated_gaming = next(mode for mode in migrated["modes"] if mode["id"] == "gaming")
             assert len(migrated_gaming["close_apps"]) == 1
             assert migrated_gaming["close_apps"][0]["type"] == "close_safe_apps"
@@ -2378,6 +2448,19 @@ def run_self_test() -> int:
                 "YouTube",
             ]
             assert all(item["process"] == "opera_gx" for item in migrated_study["launches"])
+            migrated_vibing = next(mode for mode in migrated["modes"] if mode["id"] == "chill")
+            assert migrated_vibing["name"] == "Vibing"
+            assert not migrated_vibing["close_apps"]
+            assert [item["label"] for item in migrated_vibing["launches"]] == [
+                "Opencode",
+                "Vscode",
+                "Spotify",
+                "Codex",
+                "WhatsApp Web",
+                "YouTube",
+                "GitHub",
+            ]
+            assert migrated_vibing["launches"][3]["type"] == "launch_shell"
             custom_empty = next(mode for mode in migrated["modes"] if mode["id"] == "custom-empty")
             assert not custom_empty["close_apps"] and not custom_empty["launches"]
         finally:
