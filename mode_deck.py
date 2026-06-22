@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import ctypes
 import json
 import os
 import re
@@ -32,7 +33,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -43,20 +44,49 @@ CURRENT_SESSION_PATH = SESSIONS_DIR / "current.json"
 MINECRAFT_EXE_NAMES = {"java.exe", "javaw.exe"}
 
 CRITICAL_PROCESSES = {
+    "avastsvc",
+    "avgsvc",
+    "avp",
+    "avpui",
+    "avguard",
+    "avira.servicehost",
     "applicationframehost",
+    "atieclxx",
+    "atiesrxx",
+    "audiodg",
+    "cmdagent",
     "csrss",
+    "cyserver",
     "dwm",
+    "ekrn",
+    "egui",
+    "eset service",
     "explorer",
     "fontdrvhost",
+    "healthservice",
     "lsass",
+    "mbamservice",
+    "mbamtray",
+    "mcshield",
+    "msascuil",
     "memory compression",
     "msmpeng",
+    "nissrv",
+    "nortonsecurity",
+    "nvcontainer",
+    "nvdisplay.container",
     "registry",
     "searchhost",
     "securityhealthservice",
+    "securityhealthsystray",
+    "sentinelagent",
+    "sentinelservicehost",
     "services",
     "sihost",
     "smss",
+    "sophoshealth",
+    "sophosui",
+    "sophosfilescanner",
     "spoolsv",
     "startmenuexperiencehost",
     "svchost",
@@ -68,6 +98,10 @@ CRITICAL_PROCESSES = {
     "wininit",
     "winlogon",
     "windowsdefender",
+    "wsl",
+    "wslhost",
+    "wslrelay",
+    "wslservice",
     "wudfhost",
     "vgc",
     "vgk",
@@ -251,20 +285,41 @@ def matching_processes(process_name: str) -> list[dict[str, Any]]:
     return [row for row in process_snapshot() if normalize_process_name(row["name"]) == wanted]
 
 
+def current_process_session_id() -> int:
+    session_id = ctypes.c_ulong()
+    if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
+        return int(session_id.value)
+    return -1
+
+
+def is_windows_system_path(value: str) -> bool:
+    if not value:
+        return True
+    try:
+        path = Path(os.path.expandvars(value)).resolve()
+        windows_dir = Path(os.environ.get("WINDIR", r"C:\Windows")).resolve()
+        return path == windows_dir or windows_dir in path.parents
+    except (OSError, RuntimeError):
+        return True
+
+
 def safe_user_app_processes() -> list[dict[str, Any]]:
     current_name = normalize_process_name(Path(sys.executable).name)
+    current_session = current_process_session_id()
     grouped: dict[str, dict[str, Any]] = {}
     for row in process_snapshot():
         name = normalize_process_name(str(row.get("name") or ""))
+        path = str(row.get("path") or "")
         if (
             not name
-            or not row.get("main_window")
+            or int(row.get("pid") or 0) == os.getpid()
+            or int(row.get("session_id") or -1) != current_session
             or name == current_name
             or name in {"mode deck", "python", "pythonw", "py", "pyw"}
             or not is_process_allowed(name)
+            or is_windows_system_path(path)
         ):
             continue
-        path = str(row.get("path") or "")
         key = name.lower()
         existing = grouped.get(key)
         if not existing or (path and not existing.get("path")):
@@ -596,7 +651,7 @@ def close_safe_apps_action() -> dict[str, Any]:
         "id": action_id(),
         "type": "close_safe_apps",
         "enabled": True,
-        "label": "Close safe user apps",
+        "label": "Close all safe apps and background processes",
         "target": "__safe_user_apps__",
         "launch_path": "",
         "launch_arguments": "",
@@ -646,7 +701,7 @@ def default_config() -> dict[str, Any]:
         )
 
     return {
-        "version": 7,
+        "version": 8,
         "theme": "dark",
         "suggestions_reviewed": False,
         "selected_mode_id": "gaming",
@@ -864,6 +919,11 @@ class ConfigStore:
                 changed = True
             config["version"] = 7
             changed = True
+        if int(config.get("version") or 1) < 8:
+            if apply_safe_gaming_preset(config):
+                changed = True
+            config["version"] = 8
+            changed = True
         known = {str(mode.get("id")) for mode in config["modes"]}
         if config.get("selected_mode_id") not in known and known:
             config["selected_mode_id"] = next(iter(known))
@@ -927,8 +987,8 @@ class ModeEngine:
                         PreviewItem(
                             f"{action['id']}:none",
                             "Close",
-                            "Safe user applications",
-                            "No safe visible applications are currently open",
+                            "Safe user apps and background processes",
+                            "No safely closable third-party processes are currently open",
                             True,
                         )
                     )
@@ -2161,8 +2221,9 @@ class ModeDeckApp:
         if action.get("type") == "close_safe_apps":
             messagebox.showinfo(
                 "Dynamic action",
-                "This action is generated from safe visible applications at preview time. "
-                "It can be toggled or removed, but does not have a fixed process name.",
+                "This action is generated from safely closable apps and background processes "
+                "in your Windows session at preview time. Windows, security, driver, shell, "
+                "Mode Deck, and Vanguard processes are always excluded.",
                 parent=self.root,
             )
             return
@@ -2453,7 +2514,7 @@ def run_self_test() -> int:
             migration_store = ConfigStore(root / "migration.json")
             migration_store.save(migration_config)
             migrated = migration_store.load()
-            assert migrated["version"] == 7
+            assert migrated["version"] == 8
             assert sum(
                 1
                 for mode in migrated["modes"]
@@ -2540,8 +2601,10 @@ def run_self_test() -> int:
         assert ConfigStore(root / "config.json").load()["modes"][-1]["name"] == "Custom Test"
         assert not is_process_allowed("winlogon.exe")
         assert not is_process_allowed("vgtray.exe")
+        assert not is_process_allowed("wslhost.exe")
 
         original_snapshot = globals()["process_snapshot"]
+        original_current_session = globals()["current_process_session_id"]
         original_graceful = globals()["graceful_close"]
         original_force = globals()["force_close"]
         original_wait = globals()["wait_for_process_exit"]
@@ -2562,6 +2625,7 @@ def run_self_test() -> int:
             "wsl": [],
         }
         try:
+            globals()["current_process_session_id"] = lambda: 1
             globals()["process_snapshot"] = lambda: [
                 {
                     "name": "opera.exe",
@@ -2570,6 +2634,15 @@ def run_self_test() -> int:
                     "command": "",
                     "main_window": 100,
                     "window_title": "Opera GX",
+                    "session_id": 1,
+                },
+                {
+                    "name": "spotify.exe",
+                    "pid": 5,
+                    "path": str(root / "spotify.exe"),
+                    "command": "",
+                    "main_window": 0,
+                    "window_title": "",
                     "session_id": 1,
                 },
                 {
@@ -2599,8 +2672,26 @@ def run_self_test() -> int:
                     "window_title": "Microsoft Text Input Application",
                     "session_id": 1,
                 },
+                {
+                    "name": "other-user-app.exe",
+                    "pid": 6,
+                    "path": str(root / "other-user-app.exe"),
+                    "command": "",
+                    "main_window": 500,
+                    "window_title": "Other session",
+                    "session_id": 2,
+                },
+                {
+                    "name": "mbamtray.exe",
+                    "pid": 7,
+                    "path": r"C:\Program Files\Malwarebytes\Anti-Malware\mbamtray.exe",
+                    "command": "",
+                    "main_window": 0,
+                    "window_title": "",
+                    "session_id": 1,
+                },
             ]
-            assert [item["name"] for item in safe_user_app_processes()] == ["opera"]
+            assert [item["name"] for item in safe_user_app_processes()] == ["opera", "spotify"]
 
             globals()["process_snapshot"] = lambda: (
                 [
@@ -2767,6 +2858,7 @@ def run_self_test() -> int:
             engine.restore()
         finally:
             globals()["process_snapshot"] = original_snapshot
+            globals()["current_process_session_id"] = original_current_session
             globals()["graceful_close"] = original_graceful
             globals()["force_close"] = original_force
             globals()["wait_for_process_exit"] = original_wait
