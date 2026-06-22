@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -532,12 +532,90 @@ def default_config() -> dict[str, Any]:
             chill["launches"].append(launch_action(apps[key]))
 
     return {
-        "version": 2,
+        "version": 3,
         "theme": "dark",
         "suggestions_reviewed": False,
         "selected_mode_id": "gaming",
         "modes": [gaming, study, chill],
     }
+
+
+def repair_empty_builtin_modes(config: dict[str, Any]) -> bool:
+    modes = {
+        str(mode.get("id")): mode
+        for mode in config.get("modes", [])
+        if str(mode.get("id")) in {"gaming", "study", "chill"}
+    }
+    if set(modes) != {"gaming", "study", "chill"}:
+        return False
+    enabled_count = sum(
+        1
+        for mode in modes.values()
+        for action in mode.get("close_apps", []) + mode.get("launches", [])
+        if action.get("enabled")
+    )
+    if enabled_count:
+        return False
+
+    apps = installed_app_candidates()
+    desired = {
+        "gaming": {
+            "close": ("chrome", "edge", "vscode"),
+            "launch": ("steam", "discord"),
+        },
+        "study": {
+            "close": ("steam", "discord", "spotify"),
+            "launch": ("chrome", "vscode"),
+        },
+        "chill": {
+            "close": ("vscode",),
+            "launch": ("spotify", "discord"),
+        },
+    }
+    changed = False
+    for mode_id, roles in desired.items():
+        mode = modes[mode_id]
+        close_items = mode.setdefault("close_apps", [])
+        launch_items = mode.setdefault("launches", [])
+        for key in roles["close"]:
+            if key not in apps:
+                continue
+            process = normalize_process_name(apps[key]["process"])
+            existing = next(
+                (
+                    item
+                    for item in close_items
+                    if normalize_process_name(str(item.get("target") or "")) == process
+                ),
+                None,
+            )
+            if existing:
+                if not existing.get("enabled"):
+                    existing["enabled"] = True
+                    changed = True
+            else:
+                close_items.append(close_action(apps[key]))
+                changed = True
+        for key in roles["launch"]:
+            if key not in apps:
+                continue
+            process = normalize_process_name(apps[key]["process"])
+            existing = next(
+                (
+                    item
+                    for item in launch_items
+                    if normalize_process_name(str(item.get("process") or "")) == process
+                ),
+                None,
+            )
+            if existing:
+                if not existing.get("enabled"):
+                    existing["enabled"] = True
+                    changed = True
+            else:
+                launch_items.append(launch_action(apps[key]))
+                changed = True
+    return changed
 
 
 class ConfigStore:
@@ -566,6 +644,11 @@ class ConfigStore:
                 if mode_id in builtin_accents:
                     mode["accent"] = builtin_accents[mode_id]
             config["version"] = 2
+            changed = True
+        if int(config.get("version") or 1) < 3:
+            if repair_empty_builtin_modes(config):
+                changed = True
+            config["version"] = 3
             changed = True
         known = {str(mode.get("id")) for mode in config["modes"]}
         if config.get("selected_mode_id") not in known and known:
@@ -1890,17 +1973,14 @@ class ModeDeckApp:
                 if item.get("enabled")
             ]
             lines.append(f"{mode.get('name')}: {', '.join(labels) if labels else 'no apps detected'}")
-        keep = messagebox.askyesno(
+        messagebox.showinfo(
             "Review detected suggestions",
             "Mode Deck found these installed applications:\n\n"
             + "\n".join(lines)
-            + "\n\nKeep these suggestions enabled? You can edit every action before activation.",
+            + "\n\nThese actions are enabled as starter presets. Review, toggle, or remove "
+            "them in the editor before activating a mode.",
             parent=self.root,
         )
-        if not keep:
-            for mode in self.engine.modes()[:3]:
-                for action in mode.get("close_apps", []) + mode.get("launches", []):
-                    action["enabled"] = False
         self.config["suggestions_reviewed"] = True
         self.engine.save()
         self.refresh_all()
@@ -2034,6 +2114,43 @@ def ensure_dirs() -> None:
 def run_self_test() -> int:
     with tempfile.TemporaryDirectory(prefix="mode-deck-test-") as temp_text:
         root = Path(temp_text)
+        original_candidates = globals()["installed_app_candidates"]
+        try:
+            globals()["installed_app_candidates"] = lambda: {
+                key: {
+                    "label": key.title(),
+                    "path": str(root / f"{key}.exe"),
+                    "process": key,
+                }
+                for key in ("chrome", "edge", "vscode", "steam", "discord", "spotify")
+            }
+            migration_config = default_config()
+            migration_config["version"] = 2
+            for mode in migration_config["modes"]:
+                for action in mode["close_apps"] + mode["launches"]:
+                    action["enabled"] = False
+            migration_config["modes"].append(
+                {
+                    **mode_template("custom-empty", "Custom Empty", "cyan"),
+                    "builtin": False,
+                }
+            )
+            migration_store = ConfigStore(root / "migration.json")
+            migration_store.save(migration_config)
+            migrated = migration_store.load()
+            assert migrated["version"] == 3
+            assert sum(
+                1
+                for mode in migrated["modes"]
+                if mode["id"] in {"gaming", "study", "chill"}
+                for action in mode["close_apps"] + mode["launches"]
+                if action["enabled"]
+            ) == 13
+            custom_empty = next(mode for mode in migrated["modes"] if mode["id"] == "custom-empty")
+            assert not custom_empty["close_apps"] and not custom_empty["launches"]
+        finally:
+            globals()["installed_app_candidates"] = original_candidates
+
         store = ConfigStore(root / "config.json")
         engine = ModeEngine(store, root / "sessions" / "current.json", root / "logs")
         assert {mode["id"] for mode in engine.modes()} >= {"gaming", "study", "chill"}
