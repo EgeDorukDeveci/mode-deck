@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -1194,9 +1194,6 @@ class ModeDeckApp:
             borderwidth=0,
             height=72,
         )
-        mode_scroll = ttk.Scrollbar(
-            list_container, orient="horizontal", command=self.mode_canvas.xview
-        )
         self.mode_list = tk.Frame(self.mode_canvas, bg=P["sidebar"])
         self.mode_list.bind(
             "<Configure>",
@@ -1211,30 +1208,27 @@ class ModeDeckApp:
             "<Configure>",
             lambda event: self.mode_canvas.itemconfigure(self.mode_window, height=event.height),
         )
-        self.mode_canvas.configure(xscrollcommand=mode_scroll.set)
         self.mode_canvas.grid(row=0, column=0, sticky="nsew")
-        mode_scroll.grid(row=1, column=0, sticky="ew")
+        self.mode_canvas.bind("<MouseWheel>", self._scroll_mode_shelf)
+        self.mode_list.bind("<MouseWheel>", self._scroll_mode_shelf)
 
         management = tk.Frame(shelf, bg=P["sidebar"])
-        management.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(6, 12), pady=10)
+        management.grid(row=0, column=1, sticky="ns", padx=(6, 12), pady=10)
         ttk.Button(management, text="New mode", style="Compact.TButton", command=self.create_mode).grid(
             row=0, column=0, columnspan=2, sticky="ew"
         )
         ttk.Button(
-            management, text="Duplicate", style="Compact.TButton", command=self.duplicate_mode
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Button(
             management, text="<", style="Compact.TButton", command=lambda: self.move_mode(-1)
-        ).grid(row=2, column=0, sticky="ew", pady=(6, 0), padx=(0, 3))
+        ).grid(row=1, column=0, sticky="ew", pady=(6, 0), padx=(0, 3))
         ttk.Button(
             management, text=">", style="Compact.TButton", command=lambda: self.move_mode(1)
-        ).grid(row=2, column=1, sticky="ew", pady=(6, 0), padx=(3, 0))
+        ).grid(row=1, column=1, sticky="ew", pady=(6, 0), padx=(3, 0))
         ttk.Button(
             management,
             text="Delete",
             style="CompactDanger.TButton",
             command=self.delete_mode,
-        ).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         workspace = tk.Frame(self.root, bg=P["bg"])
         workspace.grid(row=2, column=0, sticky="nsew", padx=28, pady=(0, 24))
@@ -1533,15 +1527,23 @@ class ModeDeckApp:
                 cursor="hand2",
             )
             button.grid(row=0, column=1, sticky="ew")
-            tk.Label(
+            meta_label = tk.Label(
                 row,
                 text=f"{action_count} action{'s' if action_count != 1 else ''}",
                 bg=P["panel_alt"] if selected else P["panel"],
                 fg=P["muted"],
                 font=("Segoe UI", 8),
                 anchor="w",
-            ).grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 6))
+            )
+            meta_label.grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 6))
+            for widget in (row, dot, button, meta_label):
+                widget.bind("<MouseWheel>", self._scroll_mode_shelf)
             self.mode_buttons[str(mode.get("id"))] = button
+
+    def _scroll_mode_shelf(self, event: tk.Event) -> str:
+        direction = -1 if event.delta > 0 else 1
+        self.mode_canvas.xview_scroll(direction * 3, "units")
+        return "break"
 
     def select_mode(self, mode_id: str) -> None:
         self.save_mode(silent=True)
@@ -1835,19 +1837,6 @@ class ModeDeckApp:
         mode["builtin"] = False
         self.engine.modes().append(mode)
         self.selected_mode_id = str(mode["id"])
-        self.config["selected_mode_id"] = self.selected_mode_id
-        self.engine.save()
-        self.refresh_all()
-
-    def duplicate_mode(self) -> None:
-        source = copy.deepcopy(self.selected_mode())
-        source["id"] = uuid.uuid4().hex[:10]
-        source["name"] = f"{source.get('name', 'Mode')} Copy"
-        source["builtin"] = False
-        for action in source.get("close_apps", []) + source.get("launches", []):
-            action["id"] = action_id()
-        self.engine.modes().append(source)
-        self.selected_mode_id = str(source["id"])
         self.config["selected_mode_id"] = self.selected_mode_id
         self.engine.save()
         self.refresh_all()
