@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -611,9 +611,12 @@ def default_config() -> dict[str, Any]:
     chill = mode_template("chill", "Chill", "gold")
 
     gaming["close_apps"].append(close_safe_apps_action())
-    for key in ("steam", "discord"):
-        if key in apps:
-            gaming["launches"].append(launch_action(apps[key]))
+    if "steam" in apps:
+        gaming["launches"].append(launch_action(apps["steam"]))
+    if "opera_gx" in apps:
+        gaming["launches"].append(
+            browser_url_action(apps["opera_gx"], "Discord Web", "https://discord.com/app")
+        )
 
     for key in ("steam", "epic"):
         if key in apps:
@@ -643,7 +646,7 @@ def default_config() -> dict[str, Any]:
         )
 
     return {
-        "version": 6,
+        "version": 7,
         "theme": "dark",
         "suggestions_reviewed": False,
         "selected_mode_id": "gaming",
@@ -762,6 +765,24 @@ def apply_safe_gaming_preset(config: dict[str, Any]) -> bool:
     return True
 
 
+def apply_gaming_browser_preset(config: dict[str, Any]) -> bool:
+    gaming = next(
+        (mode for mode in config.get("modes", []) if str(mode.get("id")) == "gaming"),
+        None,
+    )
+    if not gaming:
+        return False
+    apps = installed_app_candidates()
+    gaming["launches"] = []
+    if "steam" in apps:
+        gaming["launches"].append(launch_action(apps["steam"]))
+    if "opera_gx" in apps:
+        gaming["launches"].append(
+            browser_url_action(apps["opera_gx"], "Discord Web", "https://discord.com/app")
+        )
+    return True
+
+
 def apply_vibing_preset(config: dict[str, Any]) -> bool:
     vibing = next(
         (mode for mode in config.get("modes", []) if str(mode.get("id")) == "chill"),
@@ -837,6 +858,11 @@ class ConfigStore:
             if apply_vibing_preset(config):
                 changed = True
             config["version"] = 6
+            changed = True
+        if int(config.get("version") or 1) < 7:
+            if apply_gaming_browser_preset(config):
+                changed = True
+            config["version"] = 7
             changed = True
         known = {str(mode.get("id")) for mode in config["modes"]}
         if config.get("selected_mode_id") not in known and known:
@@ -2427,7 +2453,7 @@ def run_self_test() -> int:
             migration_store = ConfigStore(root / "migration.json")
             migration_store.save(migration_config)
             migrated = migration_store.load()
-            assert migrated["version"] == 6
+            assert migrated["version"] == 7
             assert sum(
                 1
                 for mode in migrated["modes"]
@@ -2438,6 +2464,12 @@ def run_self_test() -> int:
             migrated_gaming = next(mode for mode in migrated["modes"] if mode["id"] == "gaming")
             assert len(migrated_gaming["close_apps"]) == 1
             assert migrated_gaming["close_apps"][0]["type"] == "close_safe_apps"
+            assert [item["label"] for item in migrated_gaming["launches"]] == [
+                "Steam",
+                "Discord Web",
+            ]
+            assert migrated_gaming["launches"][1]["process"] == "opera_gx"
+            assert migrated_gaming["launches"][1]["arguments"] == "https://discord.com/app"
             migrated_study = next(mode for mode in migrated["modes"] if mode["id"] == "study")
             assert [item["target"] for item in migrated_study["close_apps"]] == [
                 "steam",
@@ -2790,6 +2822,10 @@ def run_ui_smoke_test() -> int:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("--version", action="version", version=f"%(prog)s {APP_VERSION}")
     parser.add_argument("--self-test", action="store_true")
