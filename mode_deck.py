@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -2017,9 +2017,13 @@ class ModeDeckApp:
             return
         self.config["theme"] = selected
         self.engine.save()
-        command = [sys.executable] if FROZEN else [sys.executable, str(Path(__file__).resolve())]
-        subprocess.Popen(command, cwd=str(APP_DIR), close_fds=True)
-        self.root.destroy()
+        apply_theme(selected)
+        for child in self.root.winfo_children():
+            child.destroy()
+        self.mode_buttons.clear()
+        self._build_styles()
+        self._build_ui()
+        self.refresh_all()
 
 
 def ensure_dirs() -> None:
@@ -2228,6 +2232,14 @@ def run_ui_smoke_test() -> int:
             assert app.activate_button.winfo_exists()
             assert app.restore_button.instate(["disabled"])
             assert app.notebook.index("end") == 5
+            opposite = "light" if theme_name == "dark" else "dark"
+            app.theme_var.set(opposite.title())
+            app.change_theme()
+            root.update_idletasks()
+            root.update()
+            assert engine.config["theme"] == opposite
+            assert root.cget("bg") == THEMES[opposite]["bg"]
+            assert ConfigStore(store.path).load()["theme"] == opposite
             root.destroy()
     print("UI smoke test passed: dark and light themes and all editor tabs render.")
     return 0
