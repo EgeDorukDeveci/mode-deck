@@ -32,6 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
+APP_VERSION = "1.0.0"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -69,48 +70,54 @@ CRITICAL_PROCESSES = {
 
 THEMES = {
     "dark": {
-        "bg": "#101613",
-        "sidebar": "#151d19",
-        "panel": "#19221d",
-        "panel_alt": "#202c25",
-        "input": "#111815",
-        "line": "#34443a",
-        "text": "#eef4ef",
-        "muted": "#9daf9f",
-        "green": "#55d68b",
-        "green_dark": "#17472e",
-        "blue": "#63b7f1",
-        "blue_dark": "#183b52",
-        "amber": "#e7bc55",
-        "amber_dark": "#4e3b15",
-        "red": "#f17b72",
-        "red_dark": "#4d2422",
-        "button": "#233029",
-        "button_hover": "#2c3c33",
-        "disabled": "#28322d",
-        "disabled_text": "#76847b",
+        "bg": "#141417",
+        "sidebar": "#18181c",
+        "panel": "#1d1d22",
+        "panel_alt": "#25252b",
+        "input": "#111114",
+        "line": "#3b3b43",
+        "text": "#f2efe7",
+        "muted": "#aaa69d",
+        "green": "#7ac99b",
+        "green_dark": "#1d3d2b",
+        "blue": "#69d2e7",
+        "blue_dark": "#173d45",
+        "amber": "#e8c45f",
+        "amber_dark": "#493c19",
+        "red": "#ff816f",
+        "red_dark": "#4d2723",
+        "coral": "#ff816f",
+        "cyan": "#69d2e7",
+        "gold": "#e8c45f",
+        "button": "#29292f",
+        "button_hover": "#34343b",
+        "disabled": "#2b2b30",
+        "disabled_text": "#77777f",
     },
     "light": {
-        "bg": "#f3f6f3",
-        "sidebar": "#e8eee9",
-        "panel": "#ffffff",
-        "panel_alt": "#eef3ef",
-        "input": "#f8faf8",
-        "line": "#c5d1c8",
-        "text": "#17221b",
-        "muted": "#5f7165",
-        "green": "#177b48",
-        "green_dark": "#d9f0e2",
-        "blue": "#216f9e",
-        "blue_dark": "#dcecf6",
-        "amber": "#8a6417",
-        "amber_dark": "#f4e9cc",
-        "red": "#a13e38",
-        "red_dark": "#f5dfdd",
-        "button": "#e2e9e3",
-        "button_hover": "#d5dfd7",
-        "disabled": "#e6ebe7",
-        "disabled_text": "#8c9990",
+        "bg": "#f4f1ea",
+        "sidebar": "#ebe7df",
+        "panel": "#fffdf8",
+        "panel_alt": "#eeeae2",
+        "input": "#faf8f2",
+        "line": "#ccc6bb",
+        "text": "#242329",
+        "muted": "#6d6962",
+        "green": "#2f8054",
+        "green_dark": "#dcecdf",
+        "blue": "#187e92",
+        "blue_dark": "#d9eef1",
+        "amber": "#80600d",
+        "amber_dark": "#f0e6c6",
+        "red": "#ad4639",
+        "red_dark": "#f4ded9",
+        "coral": "#c85645",
+        "cyan": "#187e92",
+        "gold": "#9a7110",
+        "button": "#e6e1d8",
+        "button_hover": "#dad4ca",
+        "disabled": "#e8e4dc",
+        "disabled_text": "#969088",
     },
 }
 
@@ -500,9 +507,9 @@ def mode_template(mode_id: str, name: str, accent: str) -> dict[str, Any]:
 
 def default_config() -> dict[str, Any]:
     apps = installed_app_candidates()
-    gaming = mode_template("gaming", "Gaming", "green")
-    study = mode_template("study", "Study", "blue")
-    chill = mode_template("chill", "Chill", "amber")
+    gaming = mode_template("gaming", "Gaming", "coral")
+    study = mode_template("study", "Study", "cyan")
+    chill = mode_template("chill", "Chill", "gold")
 
     for key in ("chrome", "edge", "vscode"):
         if key in apps:
@@ -525,7 +532,7 @@ def default_config() -> dict[str, Any]:
             chill["launches"].append(launch_action(apps[key]))
 
     return {
-        "version": 1,
+        "version": 2,
         "theme": "dark",
         "suggestions_reviewed": False,
         "selected_mode_id": "gaming",
@@ -551,6 +558,14 @@ class ConfigStore:
             changed = True
         if not isinstance(config.get("modes"), list):
             config["modes"] = default_config()["modes"]
+            changed = True
+        if int(config.get("version") or 1) < 2:
+            builtin_accents = {"gaming": "coral", "study": "cyan", "chill": "gold"}
+            for mode in config.get("modes", []):
+                mode_id = str(mode.get("id") or "")
+                if mode_id in builtin_accents:
+                    mode["accent"] = builtin_accents[mode_id]
+            config["version"] = 2
             changed = True
         known = {str(mode.get("id")) for mode in config["modes"]}
         if config.get("selected_mode_id") not in known and known:
@@ -805,7 +820,10 @@ class ModeEngine:
         session = self.pending_session()
         if not session:
             raise RuntimeError("There is no Mode Deck session to restore.")
-        mode = self.mode(str(session.get("mode_id"))) if session.get("mode_id") else {}
+        try:
+            mode = self.mode(str(session.get("mode_id"))) if session.get("mode_id") else {}
+        except RuntimeError:
+            mode = {}
         restore_options = mode.get("restore", {})
         results: list[dict[str, str]] = []
         session["status"] = "restoring"
@@ -1014,15 +1032,15 @@ class ModeDeckApp:
             "Primary.TButton",
             font=("Segoe UI Semibold", 11),
             padding=(17, 12),
-            background=P["green"],
-            foreground="#0b1e12",
-            bordercolor=P["green"],
-            lightcolor=P["green"],
-            darkcolor=P["green"],
+            background=P["coral"],
+            foreground="#23100d",
+            bordercolor=P["coral"],
+            lightcolor=P["coral"],
+            darkcolor=P["coral"],
         )
         style.map(
             "Primary.TButton",
-            background=[("active", P["green"]), ("disabled", P["disabled"])],
+            background=[("active", P["coral"]), ("disabled", P["disabled"])],
             foreground=[("disabled", P["disabled_text"])],
         )
         style.configure(
@@ -1099,100 +1117,35 @@ class ModeDeckApp:
             foreground=P["muted"],
             font=("Segoe UI Semibold", 9),
         )
-        style.map("Treeview", background=[("selected", P["green_dark"])])
+        style.map("Treeview", background=[("selected", P["blue_dark"])])
 
     def _build_ui(self) -> None:
         self.root.title("Mode Deck")
-        self.root.geometry("1120x730")
-        self.root.minsize(920, 620)
+        self.root.geometry("1240x760")
+        self.root.minsize(980, 640)
         self.root.configure(bg=P["bg"])
-        self.root.columnconfigure(1, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(2, weight=1)
 
-        sidebar = tk.Frame(self.root, bg=P["sidebar"], width=280)
-        sidebar.grid(row=0, column=0, sticky="nsew")
-        sidebar.grid_propagate(False)
-        sidebar.columnconfigure(0, weight=1)
-        sidebar.rowconfigure(2, weight=1)
+        header = tk.Frame(self.root, bg=P["bg"], height=68)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
+        header.columnconfigure(2, weight=1)
 
-        brand = tk.Frame(sidebar, bg=P["sidebar"])
-        brand.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 16))
-        canvas = tk.Canvas(brand, width=34, height=34, bg=P["sidebar"], highlightthickness=0)
-        canvas.pack(side="left")
-        canvas.create_rectangle(3, 3, 31, 31, fill=P["green_dark"], outline=P["green"], width=2)
-        canvas.create_rectangle(9, 9, 15, 15, fill=P["green"], outline="")
-        canvas.create_rectangle(19, 19, 25, 25, fill=P["blue"], outline="")
+        mark = tk.Canvas(header, width=48, height=30, bg=P["bg"], highlightthickness=0)
+        mark.grid(row=0, column=0, padx=(28, 13), pady=19)
+        mark.create_rectangle(2, 15, 12, 28, fill=P["coral"], outline="")
+        mark.create_rectangle(18, 7, 28, 28, fill=P["cyan"], outline="")
+        mark.create_rectangle(34, 2, 44, 28, fill=P["gold"], outline="")
         tk.Label(
-            brand,
-            text="MODE DECK",
-            bg=P["sidebar"],
-            fg=P["text"],
-            font=("Segoe UI Semibold", 16),
-        ).pack(side="left", padx=(11, 0))
-
-        toolbar = tk.Frame(sidebar, bg=P["sidebar"])
-        toolbar.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
-        ttk.Button(toolbar, text="New", command=self.create_mode).pack(side="left")
-        ttk.Button(toolbar, text="Duplicate", command=self.duplicate_mode).pack(side="left", padx=(7, 0))
-
-        self.mode_list = tk.Frame(sidebar, bg=P["sidebar"])
-        self.mode_list.grid(row=2, column=0, sticky="nsew", padx=20)
-        self.mode_list.columnconfigure(0, weight=1)
-
-        order = tk.Frame(sidebar, bg=P["sidebar"])
-        order.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 0))
-        for column in range(3):
-            order.columnconfigure(column, weight=1)
-        ttk.Button(
-            order, text="Up", style="Compact.TButton", command=lambda: self.move_mode(-1)
-        ).grid(row=0, column=0, sticky="ew")
-        ttk.Button(
-            order, text="Down", style="Compact.TButton", command=lambda: self.move_mode(1)
-        ).grid(row=0, column=1, sticky="ew", padx=6)
-        ttk.Button(
-            order, text="Delete", style="CompactDanger.TButton", command=self.delete_mode
-        ).grid(row=0, column=2, sticky="ew")
-
-        sidebar_footer = tk.Frame(sidebar, bg=P["sidebar"])
-        sidebar_footer.grid(row=4, column=0, sticky="ew", padx=20, pady=20)
-        sidebar_footer.columnconfigure(0, weight=1)
-        tk.Label(
-            sidebar_footer,
-            text="Theme",
-            bg=P["sidebar"],
-            fg=P["muted"],
-            font=("Segoe UI", 9),
-        ).grid(row=0, column=0, sticky="w")
-        self.theme_var = tk.StringVar(value=str(self.config.get("theme") or "dark").title())
-        theme = ttk.Combobox(
-            sidebar_footer,
-            textvariable=self.theme_var,
-            values=("Dark", "Light"),
-            state="readonly",
-            width=9,
-        )
-        theme.grid(row=0, column=1, sticky="e")
-        theme.bind("<<ComboboxSelected>>", self.change_theme)
-
-        content = tk.Frame(self.root, bg=P["bg"])
-        content.grid(row=0, column=1, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-        content.rowconfigure(2, weight=1)
-
-        heading = tk.Frame(content, bg=P["bg"])
-        heading.grid(row=0, column=0, sticky="ew", padx=34, pady=(28, 14))
-        heading.columnconfigure(0, weight=1)
-        self.mode_name_label = tk.Label(
-            heading,
-            text="",
+            header,
+            text="Mode Deck",
             bg=P["bg"],
             fg=P["text"],
-            font=("Segoe UI Semibold", 27),
-            anchor="w",
-        )
-        self.mode_name_label.grid(row=0, column=0, sticky="ew")
+            font=("Segoe UI Semibold", 18),
+        ).grid(row=0, column=1, sticky="w")
         self.session_badge = tk.Label(
-            heading,
+            header,
             text="",
             bg=P["green_dark"],
             fg=P["green"],
@@ -1200,43 +1153,187 @@ class ModeDeckApp:
             padx=11,
             pady=7,
         )
-        self.session_badge.grid(row=0, column=1)
+        self.session_badge.grid(row=0, column=3, padx=(12, 16))
         self.session_badge.grid_remove()
+        tk.Label(
+            header,
+            text="Theme",
+            bg=P["bg"],
+            fg=P["muted"],
+            font=("Segoe UI", 9),
+        ).grid(row=0, column=4, padx=(0, 7))
+        self.theme_var = tk.StringVar(value=str(self.config.get("theme") or "dark").title())
+        theme = ttk.Combobox(
+            header,
+            textvariable=self.theme_var,
+            values=("Dark", "Light"),
+            state="readonly",
+            width=8,
+        )
+        theme.grid(row=0, column=5, padx=(0, 28))
+        theme.bind("<<ComboboxSelected>>", self.change_theme)
+
+        shelf = tk.Frame(
+            self.root,
+            bg=P["sidebar"],
+            highlightthickness=1,
+            highlightbackground=P["line"],
+        )
+        shelf.grid(row=1, column=0, sticky="ew", padx=28, pady=(0, 18))
+        shelf.columnconfigure(0, weight=1)
+
+        list_container = tk.Frame(shelf, bg=P["sidebar"], height=76)
+        list_container.grid(row=0, column=0, sticky="ew", padx=(12, 6))
+        list_container.grid_propagate(False)
+        list_container.columnconfigure(0, weight=1)
+        list_container.rowconfigure(0, weight=1)
+        self.mode_canvas = tk.Canvas(
+            list_container,
+            bg=P["sidebar"],
+            highlightthickness=0,
+            borderwidth=0,
+            height=72,
+        )
+        mode_scroll = ttk.Scrollbar(
+            list_container, orient="horizontal", command=self.mode_canvas.xview
+        )
+        self.mode_list = tk.Frame(self.mode_canvas, bg=P["sidebar"])
+        self.mode_list.bind(
+            "<Configure>",
+            lambda _event: self.mode_canvas.configure(
+                scrollregion=self.mode_canvas.bbox("all")
+            ),
+        )
+        self.mode_window = self.mode_canvas.create_window(
+            (0, 0), window=self.mode_list, anchor="nw"
+        )
+        self.mode_canvas.bind(
+            "<Configure>",
+            lambda event: self.mode_canvas.itemconfigure(self.mode_window, height=event.height),
+        )
+        self.mode_canvas.configure(xscrollcommand=mode_scroll.set)
+        self.mode_canvas.grid(row=0, column=0, sticky="nsew")
+        mode_scroll.grid(row=1, column=0, sticky="ew")
+
+        management = tk.Frame(shelf, bg=P["sidebar"])
+        management.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(6, 12), pady=10)
+        ttk.Button(management, text="New mode", style="Compact.TButton", command=self.create_mode).grid(
+            row=0, column=0, columnspan=2, sticky="ew"
+        )
+        ttk.Button(
+            management, text="Duplicate", style="Compact.TButton", command=self.duplicate_mode
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Button(
+            management, text="<", style="Compact.TButton", command=lambda: self.move_mode(-1)
+        ).grid(row=2, column=0, sticky="ew", pady=(6, 0), padx=(0, 3))
+        ttk.Button(
+            management, text=">", style="Compact.TButton", command=lambda: self.move_mode(1)
+        ).grid(row=2, column=1, sticky="ew", pady=(6, 0), padx=(3, 0))
+        ttk.Button(
+            management,
+            text="Delete",
+            style="CompactDanger.TButton",
+            command=self.delete_mode,
+        ).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        workspace = tk.Frame(self.root, bg=P["bg"])
+        workspace.grid(row=2, column=0, sticky="nsew", padx=28, pady=(0, 24))
+        workspace.columnconfigure(0, weight=3)
+        workspace.columnconfigure(1, weight=1, minsize=300)
+        workspace.rowconfigure(0, weight=1)
+
+        editor = tk.Frame(workspace, bg=P["bg"])
+        editor.grid(row=0, column=0, sticky="nsew", padx=(0, 20))
+        editor.columnconfigure(0, weight=1)
+        editor.rowconfigure(2, weight=1)
+
+        heading = tk.Frame(editor, bg=P["bg"])
+        heading.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        heading.columnconfigure(0, weight=1)
+        self.mode_name_label = tk.Label(
+            heading,
+            text="",
+            bg=P["bg"],
+            fg=P["text"],
+            font=("Segoe UI Semibold", 25),
+            anchor="w",
+        )
+        self.mode_name_label.grid(row=0, column=0, sticky="ew")
+        self.save_button = ttk.Button(
+            heading, text="Save changes", command=self.save_mode
+        )
+        self.save_button.grid(row=0, column=1, sticky="e")
 
         self.summary_label = tk.Label(
-            content,
+            editor,
             text="",
             bg=P["bg"],
             fg=P["muted"],
             font=("Segoe UI", 10),
             anchor="w",
         )
-        self.summary_label.grid(row=1, column=0, sticky="ew", padx=36, pady=(0, 12))
+        self.summary_label.grid(row=1, column=0, sticky="ew", pady=(0, 12))
 
-        self.notebook = ttk.Notebook(content)
-        self.notebook.grid(row=2, column=0, sticky="nsew", padx=34)
+        self.notebook = ttk.Notebook(editor)
+        self.notebook.grid(row=2, column=0, sticky="nsew")
         self._build_general_tab()
         self._build_close_tab()
         self._build_launch_tab()
         self._build_system_tab()
         self._build_restore_tab()
 
-        footer = tk.Frame(content, bg=P["bg"])
-        footer.grid(row=3, column=0, sticky="ew", padx=34, pady=22)
-        footer.columnconfigure(0, weight=1)
-        self.save_button = ttk.Button(footer, text="Save mode", command=self.save_mode)
-        self.save_button.grid(row=0, column=1, padx=(8, 8))
-        self.restore_button = ttk.Button(
-            footer, text="Restore previous state", command=self.restore_session
+        run_sheet = tk.Frame(
+            workspace,
+            bg=P["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=P["line"],
+            width=310,
         )
-        self.restore_button.grid(row=0, column=2, padx=(0, 8))
+        run_sheet.grid(row=0, column=1, sticky="nsew")
+        run_sheet.grid_propagate(False)
+        run_sheet.columnconfigure(0, weight=1)
+        run_sheet.rowconfigure(2, weight=1)
+        tk.Label(
+            run_sheet,
+            text="Activation queue",
+            bg=P["panel_alt"],
+            fg=P["text"],
+            font=("Segoe UI Semibold", 15),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 4))
+        tk.Label(
+            run_sheet,
+            text="Enabled actions for the selected mode",
+            bg=P["panel_alt"],
+            fg=P["muted"],
+            font=("Segoe UI", 9),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 12))
+        self.queue_list = tk.Listbox(
+            run_sheet,
+            bg=P["input"],
+            fg=P["text"],
+            selectbackground=P["blue_dark"],
+            selectforeground=P["text"],
+            highlightthickness=1,
+            highlightbackground=P["line"],
+            relief="flat",
+            borderwidth=0,
+            font=("Segoe UI", 9),
+            activestyle="none",
+        )
+        self.queue_list.grid(row=2, column=0, sticky="nsew", padx=18)
+        self.restore_button = ttk.Button(
+            run_sheet, text="Restore previous state", command=self.restore_session
+        )
+        self.restore_button.grid(row=3, column=0, sticky="ew", padx=18, pady=(16, 8))
         self.activate_button = ttk.Button(
-            footer,
+            run_sheet,
             text="Preview and activate",
             style="Primary.TButton",
             command=self.preview_and_activate,
         )
-        self.activate_button.grid(row=0, column=3)
+        self.activate_button.grid(row=4, column=0, sticky="ew", padx=18, pady=(0, 18))
 
     def _tab(self, title: str) -> tk.Frame:
         frame = tk.Frame(self.notebook, bg=P["panel"], padx=18, pady=18)
@@ -1258,7 +1355,7 @@ class ModeDeckApp:
         ttk.Combobox(
             tab,
             textvariable=self.accent_var,
-            values=("green", "blue", "amber"),
+            values=("coral", "cyan", "gold"),
             state="readonly",
         ).grid(row=3, column=0, sticky="w", pady=(5, 0))
 
@@ -1389,20 +1486,36 @@ class ModeDeckApp:
         for child in self.mode_list.winfo_children():
             child.destroy()
         self.mode_buttons.clear()
-        accents = {"green": P["green"], "blue": P["blue"], "amber": P["amber"]}
+        accents = {
+            "coral": P["coral"],
+            "cyan": P["cyan"],
+            "gold": P["gold"],
+            "green": P["coral"],
+            "blue": P["cyan"],
+            "amber": P["gold"],
+        }
         for index, mode in enumerate(self.engine.modes()):
             selected = str(mode.get("id")) == self.selected_mode_id
+            accent = accents.get(str(mode.get("accent")), P["cyan"])
+            action_count = sum(
+                1
+                for item in mode.get("close_apps", []) + mode.get("launches", [])
+                if item.get("enabled")
+            )
             row = tk.Frame(
                 self.mode_list,
                 bg=P["panel_alt"] if selected else P["panel"],
                 highlightthickness=1,
-                highlightbackground=accents.get(str(mode.get("accent")), P["green"]) if selected else P["line"],
+                highlightbackground=accent if selected else P["line"],
+                width=158,
+                height=58,
             )
-            row.grid(row=index, column=0, sticky="ew", pady=(0, 7))
+            row.grid(row=0, column=index, sticky="ns", padx=(0, 8), pady=8)
+            row.grid_propagate(False)
             row.columnconfigure(1, weight=1)
-            tk.Frame(row, width=5, bg=accents.get(str(mode.get("accent")), P["green"])).grid(
-                row=0, column=0, sticky="ns"
-            )
+            dot = tk.Canvas(row, width=14, height=14, bg=row.cget("bg"), highlightthickness=0)
+            dot.grid(row=0, column=0, rowspan=2, padx=(12, 5))
+            dot.create_oval(3, 3, 11, 11, fill=accent, outline="")
             button = tk.Button(
                 row,
                 text=str(mode.get("name") or "Mode"),
@@ -1414,12 +1527,20 @@ class ModeDeckApp:
                 relief="flat",
                 borderwidth=0,
                 anchor="w",
-                padx=13,
-                pady=13,
-                font=("Segoe UI Semibold", 11),
+                padx=4,
+                pady=6,
+                font=("Segoe UI Semibold", 10),
                 cursor="hand2",
             )
             button.grid(row=0, column=1, sticky="ew")
+            tk.Label(
+                row,
+                text=f"{action_count} action{'s' if action_count != 1 else ''}",
+                bg=P["panel_alt"] if selected else P["panel"],
+                fg=P["muted"],
+                font=("Segoe UI", 8),
+                anchor="w",
+            ).grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 6))
             self.mode_buttons[str(mode.get("id"))] = button
 
     def select_mode(self, mode_id: str) -> None:
@@ -1437,7 +1558,8 @@ class ModeDeckApp:
             f"{sum(1 for item in mode.get('launches', []) if item.get('enabled'))} launch actions"
         )
         self.name_var.set(str(mode.get("name") or ""))
-        self.accent_var.set(str(mode.get("accent") or "green"))
+        accent = str(mode.get("accent") or "cyan")
+        self.accent_var.set({"green": "coral", "blue": "cyan", "amber": "gold"}.get(accent, accent))
         system = mode.get("system", {})
         guid = str(system.get("power_plan_guid") or "")
         self.power_var.set(next((label for label, value in self.power_map.items() if value == guid), "No change"))
@@ -1448,6 +1570,7 @@ class ModeDeckApp:
         self.relaunch_var.set(bool(restore.get("relaunch_closed_apps", True)))
         self.restart_wsl_var.set(bool(restore.get("restart_wsl", True)))
         self.refresh_action_trees()
+        self.refresh_queue()
 
     def refresh_action_trees(self) -> None:
         for tree in (self.close_tree, self.launch_tree):
@@ -1479,6 +1602,27 @@ class ModeDeckApp:
                     action.get("target"),
                 ),
             )
+        self.refresh_queue()
+
+    def refresh_queue(self) -> None:
+        self.queue_list.delete(0, tk.END)
+        mode = self.selected_mode()
+        for action in mode.get("close_apps", []):
+            if action.get("enabled"):
+                self.queue_list.insert(tk.END, f"CLOSE   {action.get('label')}")
+        for action in mode.get("launches", []):
+            if action.get("enabled"):
+                kind = str(action.get("type") or "launch").replace("launch_", "").upper()
+                self.queue_list.insert(tk.END, f"{kind:<7} {action.get('label')}")
+        system = mode.get("system", {})
+        if system.get("power_plan_guid"):
+            self.queue_list.insert(tk.END, "SYSTEM  Power plan")
+        if system.get("mute_notifications"):
+            self.queue_list.insert(tk.END, "SYSTEM  Mute notifications")
+        if system.get("wsl_action") != "none":
+            self.queue_list.insert(tk.END, "SYSTEM  Stop WSL")
+        if self.queue_list.size() == 0:
+            self.queue_list.insert(tk.END, "No enabled actions")
 
     def save_mode(self, silent: bool = False) -> None:
         mode = self.selected_mode()
@@ -1488,7 +1632,7 @@ class ModeDeckApp:
                 messagebox.showwarning("Mode name", "Enter a mode name.", parent=self.root)
             return
         mode["name"] = name
-        mode["accent"] = self.accent_var.get() or "green"
+        mode["accent"] = self.accent_var.get() or "cyan"
         system = mode.setdefault("system", {})
         system["power_plan_guid"] = self.power_map.get(self.power_var.get(), "")
         system["mute_notifications"] = bool(self.notifications_var.get())
@@ -1500,6 +1644,7 @@ class ModeDeckApp:
         self.engine.save()
         self.mode_name_label.configure(text=name)
         self.refresh_sidebar()
+        self.refresh_queue()
         if not silent:
             messagebox.showinfo("Mode saved", f"{name} was saved.", parent=self.root)
 
@@ -1686,7 +1831,7 @@ class ModeDeckApp:
         name = simpledialog.askstring("New mode", "Mode name:", parent=self.root)
         if not name:
             return
-        mode = mode_template(uuid.uuid4().hex[:10], name.strip(), "green")
+        mode = mode_template(uuid.uuid4().hex[:10], name.strip(), "cyan")
         mode["builtin"] = False
         self.engine.modes().append(mode)
         self.selected_mode_id = str(mode["id"])
@@ -1709,6 +1854,14 @@ class ModeDeckApp:
 
     def delete_mode(self) -> None:
         mode = self.selected_mode()
+        session = self.engine.pending_session()
+        if session and str(session.get("mode_id")) == str(mode.get("id")):
+            messagebox.showwarning(
+                "Restore first",
+                "Restore the active session before deleting this mode.",
+                parent=self.root,
+            )
+            return
         if mode.get("builtin"):
             messagebox.showinfo(
                 "Built-in mode",
@@ -2093,6 +2246,7 @@ def run_ui_smoke_test() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=APP_NAME)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {APP_VERSION}")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--ui-smoke-test", action="store_true")
     parser.add_argument("--preview", metavar="MODE_ID", help="Print a mode preview without changing Windows.")

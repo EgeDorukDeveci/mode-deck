@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "theme": "dark",
   "suggestions_reviewed": true,
   "selected_mode_id": "gaming",
@@ -7,7 +7,7 @@
     {
       "id": "gaming",
       "name": "Gaming",
-      "accent": "green",
+      "accent": "coral",
       "builtin": true,
       "close_apps": [],
       "launches": [],

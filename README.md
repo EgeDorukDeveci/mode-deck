@@ -3,6 +3,9 @@
 Mode Deck is a local Windows 10/11 desktop app that prepares the PC for an
 activity and restores the previous state afterward.
 
+Download the current standalone Windows build from the repository's Releases
+page, or build it locally with the included script.
+
 Built-in modes:
 
 - Gaming
