@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Mode Deck"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
@@ -43,6 +43,7 @@ CURRENT_SESSION_PATH = SESSIONS_DIR / "current.json"
 MINECRAFT_EXE_NAMES = {"java.exe", "javaw.exe"}
 
 CRITICAL_PROCESSES = {
+    "applicationframehost",
     "csrss",
     "dwm",
     "explorer",
@@ -61,11 +62,16 @@ CRITICAL_PROCESSES = {
     "svchost",
     "system",
     "system idle process",
+    "systemsettings",
     "taskhostw",
+    "textinputhost",
     "wininit",
     "winlogon",
     "windowsdefender",
     "wudfhost",
+    "vgc",
+    "vgk",
+    "vgtray",
 }
 
 THEMES = {
@@ -213,8 +219,8 @@ def is_process_allowed(value: str) -> bool:
 def process_snapshot() -> list[dict[str, Any]]:
     script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
-Get-CimInstance Win32_Process |
-  Select-Object Name,ProcessId,ExecutablePath,CommandLine |
+Get-Process |
+  Select-Object ProcessName,Id,Path,MainWindowHandle,MainWindowTitle,SessionId |
   ConvertTo-Json -Compress
 """
     result = powershell(script, timeout=15)
@@ -227,10 +233,13 @@ Get-CimInstance Win32_Process |
     rows = parsed if isinstance(parsed, list) else [parsed]
     return [
         {
-            "name": str(row.get("Name") or ""),
-            "pid": int(row.get("ProcessId") or 0),
-            "path": str(row.get("ExecutablePath") or ""),
-            "command": str(row.get("CommandLine") or ""),
+            "name": str(row.get("ProcessName") or ""),
+            "pid": int(row.get("Id") or 0),
+            "path": str(row.get("Path") or ""),
+            "command": "",
+            "main_window": int(row.get("MainWindowHandle") or 0),
+            "window_title": str(row.get("MainWindowTitle") or ""),
+            "session_id": int(row.get("SessionId") or 0),
         }
         for row in rows
         if isinstance(row, dict)
@@ -240,6 +249,31 @@ Get-CimInstance Win32_Process |
 def matching_processes(process_name: str) -> list[dict[str, Any]]:
     wanted = normalize_process_name(process_name)
     return [row for row in process_snapshot() if normalize_process_name(row["name"]) == wanted]
+
+
+def safe_user_app_processes() -> list[dict[str, Any]]:
+    current_name = normalize_process_name(Path(sys.executable).name)
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in process_snapshot():
+        name = normalize_process_name(str(row.get("name") or ""))
+        if (
+            not name
+            or not row.get("main_window")
+            or name == current_name
+            or name in {"mode deck", "python", "pythonw", "py", "pyw"}
+            or not is_process_allowed(name)
+        ):
+            continue
+        path = str(row.get("path") or "")
+        key = name.lower()
+        existing = grouped.get(key)
+        if not existing or (path and not existing.get("path")):
+            grouped[key] = {
+                "name": name,
+                "label": str(row.get("window_title") or name).strip() or name,
+                "path": path,
+            }
+    return sorted(grouped.values(), key=lambda item: str(item["label"]).lower())
 
 
 def graceful_close(process_name: str) -> bool:
@@ -532,15 +566,26 @@ def mode_template(mode_id: str, name: str, accent: str) -> dict[str, Any]:
     }
 
 
+def close_safe_apps_action() -> dict[str, Any]:
+    return {
+        "id": action_id(),
+        "type": "close_safe_apps",
+        "enabled": True,
+        "label": "Close safe user apps",
+        "target": "__safe_user_apps__",
+        "launch_path": "",
+        "launch_arguments": "",
+        "restore": True,
+    }
+
+
 def default_config() -> dict[str, Any]:
     apps = installed_app_candidates()
     gaming = mode_template("gaming", "Gaming", "coral")
     study = mode_template("study", "Study", "cyan")
     chill = mode_template("chill", "Chill", "gold")
 
-    for key in ("chrome", "edge", "vscode"):
-        if key in apps:
-            gaming["close_apps"].append(close_action(apps[key]))
+    gaming["close_apps"].append(close_safe_apps_action())
     for key in ("steam", "discord"):
         if key in apps:
             gaming["launches"].append(launch_action(apps[key]))
@@ -563,7 +608,7 @@ def default_config() -> dict[str, Any]:
             chill["launches"].append(launch_action(apps[key]))
 
     return {
-        "version": 4,
+        "version": 5,
         "theme": "dark",
         "suggestions_reviewed": False,
         "selected_mode_id": "gaming",
@@ -671,6 +716,17 @@ def apply_personal_study_preset(config: dict[str, Any]) -> bool:
     return True
 
 
+def apply_safe_gaming_preset(config: dict[str, Any]) -> bool:
+    gaming = next(
+        (mode for mode in config.get("modes", []) if str(mode.get("id")) == "gaming"),
+        None,
+    )
+    if not gaming:
+        return False
+    gaming["close_apps"] = [close_safe_apps_action()]
+    return True
+
+
 class ConfigStore:
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self.path = path
@@ -707,6 +763,11 @@ class ConfigStore:
             if apply_personal_study_preset(config):
                 changed = True
             config["version"] = 4
+            changed = True
+        if int(config.get("version") or 1) < 5:
+            if apply_safe_gaming_preset(config):
+                changed = True
+            config["version"] = 5
             changed = True
         known = {str(mode.get("id")) for mode in config["modes"]}
         if config.get("selected_mode_id") not in known and known:
@@ -763,6 +824,29 @@ class ModeEngine:
         items: list[PreviewItem] = []
         for action in mode.get("close_apps", []):
             if not action.get("enabled"):
+                continue
+            if action.get("type") == "close_safe_apps":
+                apps = safe_user_app_processes()
+                if not apps:
+                    items.append(
+                        PreviewItem(
+                            f"{action['id']}:none",
+                            "Close",
+                            "Safe user applications",
+                            "No safe visible applications are currently open",
+                            True,
+                        )
+                    )
+                for app in apps:
+                    items.append(
+                        PreviewItem(
+                            f"{action['id']}:{app['name']}",
+                            "Close",
+                            str(app["label"]),
+                            f"Process: {app['name']}",
+                            True,
+                        )
+                    )
                 continue
             target = str(action.get("target") or "")
             state = "running" if normalize_process_name(target) in running else "not running; will skip"
@@ -836,6 +920,61 @@ class ModeEngine:
         log_event("activation-started", {"mode": mode_id, "session": session["id"]}, self.log_dir)
 
         for action in mode.get("close_apps", []):
+            if action.get("type") == "close_safe_apps":
+                prefix = f"{action['id']}:"
+                chosen_names = {
+                    item_id[len(prefix) :]
+                    for item_id in selected_ids
+                    if item_id.startswith(prefix) and not item_id.endswith(":none")
+                }
+                for app in safe_user_app_processes():
+                    if app["name"] not in chosen_names:
+                        continue
+                    target = str(app["name"])
+                    closed_record = {
+                        "label": app["label"],
+                        "process": target,
+                        "path": app.get("path", ""),
+                        "arguments": "",
+                        "restore": bool(action.get("restore", True)),
+                    }
+                    try:
+                        graceful_close(target)
+                        exited = wait_for_process_exit(target)
+                        forced = False
+                        if not exited and approve_force_close(str(app["label"])):
+                            forced = force_close(target)
+                            exited = wait_for_process_exit(target, 3)
+                        if exited:
+                            session["closed_apps"].append(closed_record)
+                            session["results"].append(
+                                {
+                                    "action": action["id"],
+                                    "target": target,
+                                    "status": "done",
+                                    "detail": "forced" if forced else "closed",
+                                }
+                            )
+                        else:
+                            session["results"].append(
+                                {
+                                    "action": action["id"],
+                                    "target": target,
+                                    "status": "skipped",
+                                    "detail": "still running",
+                                }
+                            )
+                    except Exception as exc:
+                        session["results"].append(
+                            {
+                                "action": action["id"],
+                                "target": target,
+                                "status": "failed",
+                                "detail": str(exc),
+                            }
+                        )
+                    atomic_write_json(self.session_path, session)
+                continue
             if str(action.get("id")) not in selected_ids:
                 continue
             target = str(action.get("target") or "")
@@ -1721,6 +1860,11 @@ class ModeDeckApp:
                 tree.delete(item)
         mode = self.selected_mode()
         for action in mode.get("close_apps", []):
+            target = (
+                "Visible user applications"
+                if action.get("type") == "close_safe_apps"
+                else action.get("target")
+            )
             self.close_tree.insert(
                 "",
                 "end",
@@ -1728,7 +1872,7 @@ class ModeDeckApp:
                 values=(
                     "Yes" if action.get("enabled") else "No",
                     action.get("label"),
-                    action.get("target"),
+                    target,
                     "Yes" if action.get("restore") else "No",
                 ),
             )
@@ -1919,6 +2063,14 @@ class ModeDeckApp:
         if not selected:
             return
         _collection, action = selected
+        if action.get("type") == "close_safe_apps":
+            messagebox.showinfo(
+                "Dynamic action",
+                "This action is generated from safe visible applications at preview time. "
+                "It can be toggled or removed, but does not have a fixed process name.",
+                parent=self.root,
+            )
+            return
         label = simpledialog.askstring(
             "Edit action",
             "Display name:",
@@ -2205,14 +2357,17 @@ def run_self_test() -> int:
             migration_store = ConfigStore(root / "migration.json")
             migration_store.save(migration_config)
             migrated = migration_store.load()
-            assert migrated["version"] == 4
+            assert migrated["version"] == 5
             assert sum(
                 1
                 for mode in migrated["modes"]
                 if mode["id"] in {"gaming", "study", "chill"}
                 for action in mode["close_apps"] + mode["launches"]
                 if action["enabled"]
-            ) == 12
+            ) == 10
+            migrated_gaming = next(mode for mode in migrated["modes"] if mode["id"] == "gaming")
+            assert len(migrated_gaming["close_apps"]) == 1
+            assert migrated_gaming["close_apps"][0]["type"] == "close_safe_apps"
             migrated_study = next(mode for mode in migrated["modes"] if mode["id"] == "study")
             assert [item["target"] for item in migrated_study["close_apps"]] == [
                 "steam",
@@ -2269,6 +2424,7 @@ def run_self_test() -> int:
         engine.save()
         assert ConfigStore(root / "config.json").load()["modes"][-1]["name"] == "Custom Test"
         assert not is_process_allowed("winlogon.exe")
+        assert not is_process_allowed("vgtray.exe")
 
         original_snapshot = globals()["process_snapshot"]
         original_graceful = globals()["graceful_close"]
@@ -2291,8 +2447,58 @@ def run_self_test() -> int:
             "wsl": [],
         }
         try:
+            globals()["process_snapshot"] = lambda: [
+                {
+                    "name": "opera.exe",
+                    "pid": 1,
+                    "path": str(root / "opera.exe"),
+                    "command": "",
+                    "main_window": 100,
+                    "window_title": "Opera GX",
+                    "session_id": 1,
+                },
+                {
+                    "name": "vgtray.exe",
+                    "pid": 2,
+                    "path": r"C:\Program Files\Riot Vanguard\vgtray.exe",
+                    "command": "",
+                    "main_window": 200,
+                    "window_title": "Vanguard",
+                    "session_id": 1,
+                },
+                {
+                    "name": "explorer.exe",
+                    "pid": 3,
+                    "path": r"C:\Windows\explorer.exe",
+                    "command": "",
+                    "main_window": 300,
+                    "window_title": "File Explorer",
+                    "session_id": 1,
+                },
+                {
+                    "name": "TextInputHost.exe",
+                    "pid": 4,
+                    "path": r"C:\Windows\SystemApps\TextInputHost.exe",
+                    "command": "",
+                    "main_window": 400,
+                    "window_title": "Microsoft Text Input Application",
+                    "session_id": 1,
+                },
+            ]
+            assert [item["name"] for item in safe_user_app_processes()] == ["opera"]
+
             globals()["process_snapshot"] = lambda: (
-                [{"name": "testapp.exe", "pid": 42, "path": str(root / "testapp.exe"), "command": ""}]
+                [
+                    {
+                        "name": "testapp.exe",
+                        "pid": 42,
+                        "path": str(root / "testapp.exe"),
+                        "command": "",
+                        "main_window": 400,
+                        "window_title": "Test App",
+                        "session_id": 1,
+                    }
+                ]
                 if states["running"]
                 else []
             )
@@ -2361,6 +2567,30 @@ def run_self_test() -> int:
             assert any(
                 item["action"] == "close-test" and item.get("detail") == "forced"
                 for item in approved["results"]
+            )
+            engine.restore()
+
+            custom["close_apps"] = [
+                {
+                    **close_safe_apps_action(),
+                    "id": "safe-test",
+                }
+            ]
+            states["running"] = True
+            globals()["graceful_close"] = lambda _name: states.update(running=False) or True
+            safe_preview = engine.preview("custom-test")
+            assert [item.id for item in safe_preview if item.group == "Close"] == [
+                "safe-test:testapp"
+            ]
+            safe_session = engine.activate(
+                "custom-test",
+                {"safe-test:testapp"},
+                approve_force_close=lambda _label: False,
+                approve_wsl=lambda _description: False,
+            )
+            assert any(
+                item.get("target") == "testapp" and item["status"] == "done"
+                for item in safe_session["results"]
             )
             engine.restore()
 
